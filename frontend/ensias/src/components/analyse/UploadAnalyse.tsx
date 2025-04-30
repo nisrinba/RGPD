@@ -1,203 +1,242 @@
-import React, { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import React, { useState, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { Upload, FileText, X, Loader2, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Upload, Database, File, FileText, X } from 'lucide-react';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cn } from '@/lib/utils';
+import { toast } from '@/components/ui/use-toast';
+import { uploadFile } from '@/services/api';
+
+interface UploadedFile {
+  file: File;
+  preview: string;
+  progress: number;
+  status: 'pending' | 'uploading' | 'completed' | 'error';
+}
 
 const UploadAnalyse: React.FC = () => {
-  const [files, setFiles] = useState<File[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState(0);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [estimatedTime, setEstimatedTime] = useState('');
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [operator, setOperator] = useState<'mask' | 'replace' | 'redact'>('mask');
+  const [isUploading, setIsUploading] = useState(false);
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    const newFiles = acceptedFiles.map(file => ({
+      file,
+      preview: URL.createObjectURL(file),
+      progress: 0,
+      status: 'pending' as const
+    }));
     
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const newFiles = Array.from(e.dataTransfer.files);
-      setFiles((prevFiles) => [...prevFiles, ...newFiles]);
-    }
+    setFiles(prev => [...prev, ...newFiles]);
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'application/pdf': ['.pdf'],
+      'text/csv': ['.csv'],
+      'text/plain': ['.txt'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'application/msword': ['.doc'],
+      'application/vnd.ms-excel': ['.xls'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx']
+    },
+    maxFiles: 5,
+    maxSize: 10 * 1024 * 1024 // 10MB
+  });
+
+  const removeFile = (index: number) => {
+    setFiles(prev => {
+      const newFiles = [...prev];
+      URL.revokeObjectURL(newFiles[index].preview);
+      newFiles.splice(index, 1);
+      return newFiles;
+    });
   };
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newFiles = Array.from(e.target.files);
-      setFiles((prevFiles) => [...prevFiles, ...newFiles]);
-    }
-  };
+  const handleUpload = async () => {
+    if (files.length === 0) return;
 
-  const removeFile = (fileToRemove: File) => {
-    setFiles(files.filter(file => file !== fileToRemove));
-  };
+    setIsUploading(true);
+    const uploadPromises = files.map(async (fileObj, index) => {
+      try {
+        setFiles(prev => {
+          const updated = [...prev];
+          updated[index] = { ...updated[index], status: 'uploading' };
+          return updated;
+        });
 
-  const startAnalysis = () => {
-    setAnalyzing(true);
-    setEstimatedTime('environ 2 minutes');
-    
-    // Simulate progress for demonstration
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 1;
-      setAnalysisProgress(progress);
-      
-      if (progress >= 100) {
-        clearInterval(interval);
-        setAnalyzing(false);
+        // Simulation de progression (à remplacer par la vraie progression si votre API la supporte)
+        for (let progress = 0; progress <= 90; progress += 10) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+          setFiles(prev => {
+            const updated = [...prev];
+            updated[index] = { ...updated[index], progress };
+            return updated;
+          });
+        }
+
+        // Upload réel vers le backend
+        const response = await uploadFile(fileObj.file, operator);
+        
+        setFiles(prev => {
+          const updated = [...prev];
+          updated[index] = { 
+            ...updated[index], 
+            progress: 100, 
+            status: 'completed'
+          };
+          return updated;
+        });
+
+        return response.data;
+      } catch (error) {
+        setFiles(prev => {
+          const updated = [...prev];
+          updated[index] = { ...updated[index], status: 'error' };
+          return updated;
+        });
+        throw error;
       }
-    }, 150);
+    });
+
+    try {
+      await Promise.all(uploadPromises);
+      toast({
+        title: "Upload réussi",
+        description: "Tous les fichiers ont été analysés avec succès",
+        variant: "default",
+      });
+    } catch (error) {
+      toast({
+        title: "Erreur d'upload",
+        description: "Certains fichiers n'ont pas pu être analysés",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploading(false);
+    }
   };
+
+  // Nettoyage des URLs de prévisualisation
+  React.useEffect(() => {
+    return () => {
+      files.forEach(file => URL.revokeObjectURL(file.preview));
+    };
+  }, [files]);
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="fichiers">
-        <TabsList className="mb-4">
-          <TabsTrigger value="fichiers">Fichiers</TabsTrigger>
-          <TabsTrigger value="base-de-donnees">Base de Données</TabsTrigger>
-          <TabsTrigger value="api">API</TabsTrigger>
-        </TabsList>
-        
-        <TabsContent value="fichiers">
-          <Card>
-            <CardHeader>
-              <CardTitle>Téléchargement des Fichiers</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {!analyzing ? (
-                <>
-                  <div
-                    className={cn(
-                      "border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors",
-                      isDragging ? "border-primary bg-primary/5" : "border-gray-300 hover:border-primary",
-                      files.length > 0 && "border-primary/30"
-                    )}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    onClick={() => document.getElementById('file-upload')?.click()}
-                  >
-                    <input
-                      id="file-upload"
-                      type="file"
-                      multiple
-                      onChange={handleFileInput}
-                      className="hidden"
-                    />
-                    <div className="flex flex-col items-center">
-                      <Upload className="h-10 w-10 text-muted-foreground mb-3" />
-                      <h3 className="text-lg font-medium mb-1">
-                        Glissez-déposez vos fichiers ici
-                      </h3>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        ou cliquez pour sélectionner des fichiers
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Formats supportés: PDF, DOC, DOCX, XLS, XLSX, CSV, TXT
-                      </p>
-                    </div>
-                  </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Analyse de fichiers</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div
+            {...getRootProps()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+              isDragActive ? 'border-primary bg-primary/10' : 'border-gray-300 hover:border-primary'
+            }`}
+          >
+            <input {...getInputProps()} />
+            <div className="flex flex-col items-center">
+              <Upload className="h-10 w-10 text-muted-foreground mb-4" />
+              <h3 className="text-lg font-medium mb-2">
+                {isDragActive ? 'Déposez vos fichiers ici' : 'Glissez-déposez vos fichiers ou cliquez pour sélectionner'}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Formats supportés: PDF, DOC, DOCX, XLS, XLSX, CSV, TXT
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Taille maximale: 10MB par fichier
+              </p>
+            </div>
+          </div>
 
-                  {files.length > 0 && (
-                    <div className="mt-6">
-                      <h4 className="font-medium mb-3">Fichiers Sélectionnés ({files.length})</h4>
-                      <div className="space-y-2 max-h-60 overflow-y-auto">
-                        {files.map((file, index) => (
-                          <div key={index} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
-                            <div className="flex items-center">
-                              <FileText className="h-5 w-5 text-blue-600 mr-2" />
-                              <div>
-                                <p className="text-sm font-medium">{file.name}</p>
-                                <p className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(2)} KB</p>
-                              </div>
-                            </div>
-                            <Button 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => removeFile(file)}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="space-y-6 py-4">
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center mb-1">
-                      <p className="text-sm font-medium">Analyse en cours...</p>
-                      <span className="text-sm font-medium">{analysisProgress}%</span>
-                    </div>
-                    <Progress value={analysisProgress} className="h-2" />
-                  </div>
-                  
-                  <div className="bg-blue-50 p-4 rounded-md">
-                    <div className="flex items-start">
-                      <div className="mr-3 mt-0.5">
-                        <File className="h-5 w-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-blue-900">Traitement des fichiers</p>
-                        <p className="text-sm text-blue-700">
-                          {files.length} fichiers en cours d'analyse
-                        </p>
-                        <p className="text-xs text-blue-600 mt-1">
-                          Temps estimé restant: {estimatedTime}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-            <CardFooter className="flex justify-between">
-              <Button variant="outline">Annuler</Button>
-              <Button 
-                onClick={startAnalysis} 
-                disabled={files.length === 0 || analyzing}
-              >
-                {analyzing ? 'Analyse en cours...' : 'Démarrer l\'analyse'}
-              </Button>
-            </CardFooter>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="base-de-donnees">
-          <Card>
-            <CardHeader>
-              <CardTitle>Connexion à une Base de Données</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-center p-12 border-2 border-dashed rounded-lg">
-                <div className="text-center">
-                  <Database className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                  <h3 className="text-lg font-medium mb-1">Configure une connexion de base de données</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Connectez-vous à MySQL, PostgreSQL, MongoDB et plus
-                  </p>
-                  <Button className="mt-4">Configurer la connexion</Button>
-                </div>
+          {files.length > 0 && (
+            <div className="mt-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium">Fichiers sélectionnés ({files.length})</h4>
+                <select
+                  value={operator}
+                  onChange={(e) => setOperator(e.target.value as 'mask' | 'replace' | 'redact')}
+                  className="border rounded-md p-2 text-sm"
+                  disabled={isUploading}
+                >
+                  <option value="mask">Masquage (****)</option>
+                  <option value="replace">Remplacement (&lt;SENSITIVE_DATA&gt;)</option>
+                  <option value="redact">Suppression complète</option>
+                </select>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
 
-      </Tabs>
+              <div className="space-y-3">
+                {files.map((fileObj, index) => (
+                  <div key={index} className="border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-3">
+                        <FileText className="h-5 w-5 text-blue-500" />
+                        <div>
+                          <p className="text-sm font-medium truncate max-w-[200px]">
+                            {fileObj.file.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {(fileObj.file.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeFile(index)}
+                        disabled={isUploading}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>
+                          {fileObj.status === 'completed' ? 'Analyse terminée' :
+                           fileObj.status === 'uploading' ? 'Analyse en cours...' :
+                           fileObj.status === 'error' ? 'Erreur' : 'En attente'}
+                        </span>
+                        <span>{fileObj.progress}%</span>
+                      </div>
+                      <Progress value={fileObj.progress} className="h-2" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+        <CardFooter className="flex justify-between">
+          <Button 
+            variant="outline" 
+            onClick={() => setFiles([])}
+            disabled={files.length === 0 || isUploading}
+          >
+            Tout effacer
+          </Button>
+          <Button
+            onClick={handleUpload}
+            disabled={files.length === 0 || isUploading}
+          >
+            {isUploading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Analyse en cours...
+              </>
+            ) : (
+              <>
+                <Shield className="h-4 w-4 mr-2" />
+                Analyser les fichiers
+              </>
+            )}
+          </Button>
+        </CardFooter>
+      </Card>
     </div>
   );
 };
